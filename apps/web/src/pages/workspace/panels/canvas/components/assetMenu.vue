@@ -31,12 +31,13 @@ import saveFile from "@/lib/saveFile";
 import { ElMessage, ElMessageBox, type DropdownInstance } from "element-plus";
 import { IconChevronRight, IconFolder, IconFolderPlus } from "@tabler/icons-vue";
 
-type AssetEntry = { name: string; path: string; type: "file" | "directory"; children?: AssetEntry[] };
+import { assetMediaUrl, assetVersionName, type AssetEntry, type VideoVersion } from "@/lib/assetVideoVersions";
 const props = defineProps<{ entries: AssetEntry[] }>();
 const emit = defineEmits<{ changed: [path?: string, target?: string] }>();
 const menu = ref<DropdownInstance>();
 const menuAnchor = shallowRef({ getBoundingClientRect: () => new DOMRect() });
 const activeEntry = shallowRef<AssetEntry>();
+let activeVersion: VideoVersion = "original";
 const moveVisible = ref(false);
 const busy = ref(false);
 const parentPath = computed(() => activeEntry.value?.path.split("/").slice(0, -1).join("/") || ".");
@@ -55,10 +56,11 @@ function destinationDisabled(path: string) {
   return path === parentPath.value || (entry?.type === "directory" && (path === entry.path || path.startsWith(entry.path + "/")));
 }
 
-async function openMenu(event: MouseEvent, entry: AssetEntry) {
+async function openMenu(event: MouseEvent, entry: AssetEntry, version: VideoVersion = "original") {
   menu.value?.handleClose();
   moveVisible.value = false;
   activeEntry.value = entry;
+  activeVersion = version;
   const target = event.currentTarget as HTMLElement;
   const rect = event.type === "contextmenu" ? new DOMRect(event.clientX, event.clientY, 0, 0) : target.getBoundingClientRect();
   menuAnchor.value = { getBoundingClientRect: () => rect };
@@ -124,10 +126,11 @@ async function handleCommand(command: string) {
   }
   const entry = activeEntry.value!;
   const parent = parentPath.value;
+  const version = activeVersion;
   closeMenu();
   try {
     if (command === "download") {
-      await saveFile(() => axios.get<Blob>("/api/assets/read", { params: { path: entry.path, download: true }, responseType: "blob" }).then(({ data }) => data), entry.name);
+      await saveFile(() => axios.get<Blob>(assetMediaUrl(entry.path, version, true), { responseType: "blob" }).then(({ data }) => data), assetVersionName(entry.name, version));
     }
     if (command === "rename") {
       const { value } = await ElMessageBox.prompt("名称", "重命名", {

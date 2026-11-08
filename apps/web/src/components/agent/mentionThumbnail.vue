@@ -10,10 +10,11 @@
 
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from "vue";
+import { assetMediaUrl, type VideoVersion } from "@/lib/assetVideoVersions";
 import useWorkspaceFiles from "@/lib/workspaceFiles";
 import { useMediaPreview } from "@toonflow/node-shared/mediaPreview";
 
-const props = defineProps<{ thumbnail?: { url: string; mimeType: string }; directory?: string; globalAsset?: boolean }>();
+const props = defineProps<{ thumbnail?: { url: string; mimeType: string }; directory?: string; globalAsset?: boolean; assetVersion?: VideoVersion }>();
 const element = ref<HTMLElement>();
 const inView = ref(false);
 const previewUrl = ref("");
@@ -27,12 +28,12 @@ onMounted(() => {
 });
 onBeforeUnmount(() => observer?.disconnect());
 
-watch([inView, () => props.thumbnail?.url, () => props.thumbnail?.mimeType, () => props.directory, () => props.globalAsset], async ([visible, path, mimeType, directory, globalAsset], _old, onCleanup) => {
+watch([inView, () => props.thumbnail?.url, () => props.thumbnail?.mimeType, () => props.directory, () => props.globalAsset, () => props.assetVersion], async ([visible, path, mimeType, directory, globalAsset, assetVersion], _old, onCleanup) => {
   previewUrl.value = "";
   failed.value = false;
   if (!visible || !path) return;
   if (globalAsset) {
-    previewUrl.value = `/api/assets/read?path=${encodeURIComponent(path)}`;
+    previewUrl.value = assetMediaUrl(path, assetVersion);
     return;
   }
   if (!directory) return;

@@ -1,4 +1,5 @@
 import * as assets from "@/utils/assets";
+import * as assetVideoVariants from "@/utils/assets/videoVariants";
 import * as browser from "@/utils/browser";
 import * as singleAgent from "@/utils/singleAgent";
 import * as desktop from "@/utils/desktop";
@@ -40,6 +41,7 @@ import * as multiTenant from "@/utils/multiTenant";
 
 export default {
   assets,
+  assetVideoVariants,
   browser,
   singleAgent,
   desktop,

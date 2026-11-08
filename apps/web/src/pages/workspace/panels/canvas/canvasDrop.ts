@@ -6,6 +6,9 @@ import type { NodeOutput } from "@toonflow/nodes-scaffold/values";
 import useWorkspaceFiles from "@/lib/workspaceFiles";
 import { getMediaMimeType, mediaMimeTypes } from "@toonflow/node-shared/mediaTypes";
 
+import { assetVersionName, type VideoVersion } from "@/lib/assetVideoVersions";
+
+const assetVersionDragType = "application/toonflow-asset-version";
 const assetDragType = "application/toonflow-asset";
 const fileMimeTypes: Record<string, string> = {
   ...mediaMimeTypes,
@@ -60,10 +63,11 @@ export function getClipboardMediaFiles(event: ClipboardEvent) {
   return files.map((file, index) => createClipboardMediaFile(file, index));
 }
 
-export function startAssetDrag(event: DragEvent, entry: { type: string; path: string }) {
+export function startAssetDrag(event: DragEvent, entry: { type: string; path: string }, version?: VideoVersion) {
   if (entry.type !== "file" || !event.dataTransfer) return;
   event.dataTransfer.effectAllowed = "copy";
   event.dataTransfer.setData(assetDragType, entry.path);
+  if (version === "1080p") event.dataTransfer.setData(assetVersionDragType, version);
 }
 
 export function isCanvasFileDrag(event: DragEvent) {
@@ -87,8 +91,9 @@ export async function dropCanvasFiles(event: DragEvent, context: CanvasFileConte
   try {
     signal.throwIfAborted();
     if (path) {
-      const { data } = await axios.get<Blob>("/api/assets/read", { params: { path }, responseType: "blob", signal });
-      droppedFiles = [new File([data], path.split("/").pop()!, { type: data.type })];
+      const version = transfer.getData(assetVersionDragType) === "1080p" ? "1080p" : undefined;
+      const { data } = await axios.get<Blob>("/api/assets/read", { params: { path, version }, responseType: "blob", signal });
+      droppedFiles = [new File([data], assetVersionName(path.split("/").pop()!, version ?? "original"), { type: data.type })];
     }
     await importCanvasFiles(droppedFiles, position, context);
   } catch (error) {

@@ -1,5 +1,5 @@
 <template>
-  <assetBrowser v-if="visible && expanded" v-model:folder="folder" v-model:searchQuery="searchQuery" v-model:newFolderName="newFolderName" :entries="entries" :loading="loading" :uploading="uploading" :newFolderParent="newFolderParent" :folderSaving="folderSaving" :mediaKind="mediaKind" :assetUrl="assetUrl" :canSelect="canSelect" :selecting="selecting" @select="emit('select', $event)" @upload="fileInput?.click()" @startFolder="startFolder" @saveFolder="saveFolder" @cancelFolder="cancelFolder" @preview="openPreview" @menu="openItemMenu" @drag="startAssetDrag" />
+  <assetBrowser v-if="visible && expanded" v-model:folder="folder" v-model:searchQuery="searchQuery" v-model:newFolderName="newFolderName" :entries="entries" :loading="loading" :uploading="uploading" :newFolderParent="newFolderParent" :folderSaving="folderSaving" :mediaKind="mediaKind" :versionFor="versionFor" :isSubmitting="isSubmitting" :canSelect="canSelect" :selecting="selecting" @select="emit('select', $event)" @upload="fileInput?.click()" @startFolder="startFolder" @saveFolder="saveFolder" @cancelFolder="cancelFolder" @preview="openPreview" @version="setVersion" @upscale="runUpscale" @menu="openItemMenu" @drag="dragAsset" />
   <el-card v-else-if="visible" class="assetLibrary" shadow="never" :bodyStyle="{ padding: '8px' }" role="region" aria-label="素材库" @dblclick.stop>
     <div class="libraryToolbar">
       <el-input v-model="searchQuery" class="searchInput" :prefixIcon="IconSearch" placeholder="搜索素材" aria-label="搜索素材" clearable @keydown.esc.stop="searchQuery = ''" />
@@ -10,10 +10,10 @@
     <el-scrollbar class="libraryScroll" maxHeight="min(440px, calc(100dvh - 198px))">
       <el-tree ref="assetTree" class="assetTree" :data="displayEntries" nodeKey="path" :props="{ label: 'name' }" :icon="IconChevronRight" :currentNodeKey="folder === '.' ? undefined : folder" :filterNodeMethod="filterEntry" defaultExpandAll highlightCurrent emptyText="" @nodeClick="selectFolder">
         <template #default="{ data, node }">
-          <div class="assetEntry" :title="data.name" :draggable="data.type === 'file'" @dragstart.stop="startAssetDrag($event, data)" @dblclick.stop="openPreview(data)" @contextmenu="openItemMenu($event, data)">
+          <div class="assetEntry" :title="data.name" :draggable="data.type === 'file'" @dragstart.stop="dragAsset($event, data)" @dblclick.stop="openPreview(data)" @contextmenu="openItemMenu($event, data)">
             <span v-if="data.type === 'directory'" class="fileIcon"><component :is="node.expanded && !node.isLeaf ? IconFolderOpen : IconFolder" :size="18" aria-hidden="true" /></span>
             <mentionThumbnail v-else-if="mediaKind(data) === 'image'" class="assetThumbnail" :thumbnail="{ url: data.path, mimeType: getMediaMimeType({ name: data.path, type: '' }) }" globalAsset @click.stop="openPreview(data)"><icon-photo :size="18" /></mentionThumbnail>
-            <mentionThumbnail v-else-if="mediaKind(data) === 'video'" class="assetThumbnail" :thumbnail="{ url: data.path, mimeType: mentionAssetType(data.path).mimeType }" globalAsset @click.stop="openPreview(data)"><icon-video :size="18" /></mentionThumbnail>
+            <mentionThumbnail v-else-if="mediaKind(data) === 'video'" class="assetThumbnail" :thumbnail="{ url: data.path, mimeType: mentionAssetType(data.path).mimeType }" :assetVersion="versionFor(data)" globalAsset @click.stop="openPreview(data)"><icon-video :size="18" /></mentionThumbnail>
             <span v-else class="fileIcon">
               <icon-music v-if="mediaKind(data) === 'audio'" :size="18" />
               <icon-file v-else :size="18" />
@@ -43,9 +43,17 @@
   <el-image-viewer v-if="previewAsset?.kind === 'image'" :urlList="[mediaSrc]" teleported @error="handleError" @close="previewAsset = undefined" />
 
   <el-dialog :modelValue="previewAsset?.kind === 'video'" :title="previewAsset?.name" width="min(800px, calc(100vw - 32px))" alignCenter appendToBody destroyOnClose @update:modelValue="previewAsset = undefined">
-    <div v-if="previewAsset?.kind === 'video'" class="assetPreview">
+    <div v-if="previewAsset?.kind === 'video' && previewEntry" class="assetPreview">
+      <div class="videoToolbar">
+        <videoVersionControl :entry="previewEntry" :version="versionFor(previewEntry)" :submitting="isSubmitting(previewEntry)"
+          @change="setVersion(previewEntry, $event)" @upscale="runUpscale(previewEntry)" />
+        <span v-if="!supportsVideoUpscale(previewEntry)" class="videoHint">超分支持 MP4 视频</span>
+        <el-button tag="a" :href="assetMediaUrl(previewEntry.path, versionFor(previewEntry), true)" :download="assetVersionName(previewEntry.name, versionFor(previewEntry))"
+          :icon="IconDownload" text>下载当前版本</el-button>
+      </div>
+      <el-alert v-if="previewEntry.upscale?.error" :title="previewEntry.upscale.error" type="warning" :closable="false" showIcon />
       <el-alert v-if="previewError" :title="previewError" type="error" :closable="false" showIcon />
-      <video v-else class="previewVideo" :src="mediaSrc" :aria-label="previewAsset.name" controls playsinline preload="auto" @loadeddata="handleLoaded" @error="handleError" />
+      <video v-else ref="previewVideo" class="previewVideo" :src="mediaSrc" :aria-label="previewAsset.name" controls playsinline preload="auto" @loadedmetadata="restoreVideoPosition" @loadeddata="handleLoaded" @error="handleError" />
       <p v-if="preparing" role="status">正在生成兼容预览…</p>
     </div>
   </el-dialog>
@@ -96,11 +104,11 @@
 </template>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, ref, watch } from "vue";
+import { computed, nextTick, onBeforeUnmount, reactive, ref, watch } from "vue";
 import axios from "axios";
 import { t } from "@toonflow/i18n/vue";
 import { ElMessage, ElTree, type InputInstance, type TreeNodeData } from "element-plus";
-import { IconChevronRight, IconDots, IconEye, IconFile, IconFolder, IconFolderOpen, IconFolderPlus, IconMusic, IconPhoto, IconSearch, IconUpload, IconVideo, IconX } from "@tabler/icons-vue";
+import { IconChevronRight, IconDots, IconDownload, IconEye, IconFile, IconFolder, IconFolderOpen, IconFolderPlus, IconMusic, IconPhoto, IconSearch, IconUpload, IconVideo, IconX } from "@tabler/icons-vue";
 import type { NodeOutput } from "@toonflow/nodes-scaffold/values";
 import { mentionAssetType } from "@toonflow/server/agent/mentionSources";
 import mentionThumbnail from "@/components/agent/mentionThumbnail.vue";
@@ -108,10 +116,11 @@ import { startAssetDrag } from "../canvasDrop";
 import useWorkspaceFiles from "@/lib/workspaceFiles";
 import assetMenu from "./assetMenu.vue";
 import assetBrowser from "./assetBrowser.vue";
+import videoVersionControl from "./videoVersionControl.vue";
+import { assetMediaUrl, assetVersionName, supportsVideoUpscale, type AssetEntry, type VideoUpscale, type VideoVersion } from "@/lib/assetVideoVersions";
 import { useMediaPreview } from "@toonflow/node-shared/mediaPreview";
 import { getMediaMimeType } from "@toonflow/node-shared/mediaTypes";
 
-type AssetEntry = { name: string; path: string; type: "file" | "directory"; children?: AssetEntry[]; draft?: boolean };
 type AssetOutput = { label: string; output: NodeOutput };
 
 const props = defineProps<{ directory?: string; expanded?: boolean; canSelect?: (entry: AssetEntry) => boolean; selecting?: boolean }>();
@@ -137,15 +146,95 @@ const newFolderParent = ref<string>();
 const newFolderName = ref("");
 const folderSaving = ref(false);
 const assetMenuRef = ref<InstanceType<typeof assetMenu>>();
-const previewAsset = ref<{ name: string; url: string; kind: "image" | "audio" | "video" }>();
-const { src: mediaSrc, preparing, error: previewError, handleError, handleLoaded } = useMediaPreview(() => previewAsset.value?.url, () => previewAsset.value?.kind ?? "image");
+const previewAsset = ref<{ entry: AssetEntry; name: string; kind: "image" | "audio" | "video" }>();
+const previewVideo = ref<HTMLVideoElement>();
+const versions = reactive(new Map<string, VideoVersion>());
+const submittingUpscale = reactive(new Set<string>());
+let playPosition: { time: number; playing: boolean } | undefined;
+const flatEntries = computed(() => {
+  const result = new Map<string, AssetEntry>();
+  function collect(items: AssetEntry[]) {
+    for (const item of items) {
+      result.set(item.path, item);
+      if (item.children) collect(item.children);
+    }
+  }
+  collect(entries.value);
+  return result;
+});
+const previewEntry = computed(() => previewAsset.value && (flatEntries.value.get(previewAsset.value.entry.path) ?? previewAsset.value.entry));
+const previewSource = computed(() => previewEntry.value ? assetMediaUrl(previewEntry.value.path, versionFor(previewEntry.value)) : undefined);
+const { src: mediaSrc, preparing, error: previewError, handleError, handleLoaded } = useMediaPreview(previewSource, () => previewAsset.value?.kind ?? "image");
 watch(previewError, error => { if (error && previewAsset.value?.kind === "image") ElMessage.error(error); });
 let loadRequest = 0;
 onBeforeUnmount(() => { loadRequest++; });
 
-function assetUrl(path: string) {
-  return `/api/assets/read?path=${encodeURIComponent(path)}`;
+function versionFor(entry: AssetEntry): VideoVersion {
+  return entry.upscale?.state === "ready" ? versions.get(entry.path) ?? "1080p" : "original";
 }
+
+function rememberVideoPosition() {
+  const video = previewVideo.value;
+  if (video?.readyState) playPosition = { time: video.currentTime, playing: !video.paused };
+}
+
+function restoreVideoPosition() {
+  const video = previewVideo.value;
+  if (!video || !playPosition) return;
+  const { time, playing } = playPosition;
+  playPosition = undefined;
+  video.currentTime = Math.min(time, video.duration);
+  if (playing) void video.play().catch(() => {});
+}
+
+function setVersion(entry: AssetEntry, version: VideoVersion) {
+  if (entry.upscale?.state !== "ready" || version === versionFor(entry)) return;
+  if (previewEntry.value?.path === entry.path) rememberVideoPosition();
+  versions.set(entry.path, version);
+}
+
+function dragAsset(event: DragEvent, entry: AssetEntry) {
+  startAssetDrag(event, entry, versionFor(entry));
+}
+
+const isSubmitting = (entry: AssetEntry) => submittingUpscale.has(entry.path);
+
+function updateUpscale(path: string, upscale?: VideoUpscale) {
+  const entry = flatEntries.value.get(path);
+  if (!entry) return;
+  if (upscale?.state === "ready" && entry.upscale?.state !== "ready" && previewEntry.value?.path === path) rememberVideoPosition();
+  entry.upscale = upscale;
+}
+
+async function runUpscale(entry: AssetEntry) {
+  if (!supportsVideoUpscale(entry) || isSubmitting(entry) || entry.upscale?.state === "running" || entry.upscale?.state === "ready") return;
+  submittingUpscale.add(entry.path);
+  try {
+    const { data } = await axios.post<{ data: { upscale?: VideoUpscale } }>("/api/assets/upscale", { path: entry.path }, { headers: { "x-toonflow-workspace": "1" } });
+    updateUpscale(entry.path, data.data.upscale);
+  } catch (error) {
+    showError(error);
+    await refreshAssets();
+  } finally { submittingUpscale.delete(entry.path); }
+}
+
+watch(visible, (opened, _, cleanup) => {
+  if (!opened) return;
+  const lifetime = new AbortController();
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  cleanup(() => { lifetime.abort(); clearTimeout(timer); });
+  async function poll() {
+    const active = [...flatEntries.value.values()].filter(entry => entry.upscale?.state === "running");
+    await Promise.allSettled(active.map(async entry => {
+      const { data } = await axios.get<{ data: { upscale?: VideoUpscale } }>("/api/assets/upscaleStatus", {
+        params: { path: entry.path }, signal: lifetime.signal, timeout: 12_000,
+      });
+      if (!lifetime.signal.aborted) updateUpscale(entry.path, data.data.upscale);
+    }));
+    if (!lifetime.signal.aborted) timer = setTimeout(poll, 4_000);
+  }
+  timer = setTimeout(poll, 4_000);
+}, { immediate: true });
 
 function mediaKind(entry: AssetEntry) {
   if (entry.type !== "file" || entry.draft) return;
@@ -159,14 +248,15 @@ function openPreview(entry: AssetEntry) {
   const kind = mediaKind(entry);
   if (!kind) return;
   previewError.value = "";
-  previewAsset.value = { name: entry.name, url: assetUrl(entry.path), kind };
+  playPosition = undefined;
+  previewAsset.value = { entry, name: entry.name, kind };
 }
 
 function openItemMenu(event: MouseEvent, entry: AssetEntry) {
   if (entry.draft) return;
   event.preventDefault();
   event.stopPropagation();
-  assetMenuRef.value?.openMenu(event, entry);
+  assetMenuRef.value?.openMenu(event, entry, versionFor(entry));
 }
 
 async function refreshAssets(path?: string, target?: string) {
@@ -489,6 +579,15 @@ defineExpose({ openSave });
 }
 
 .assetPreview {
+  .videoToolbar {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    flex-wrap: wrap;
+    margin-bottom: 8px;
+    .videoHint { color: var(--el-text-color-secondary); font-size: 13px; }
+  }
   .previewAudio { display: block; width: 100%; }
   .previewVideo {
     display: block;

@@ -8,12 +8,13 @@ import { validateFields } from "@/lib/middleware";
 
 const router = Router();
 
-export default router.get("/", validateFields({ path: z.string().min(1).max(4096), download: z.literal("true").optional() }, "query"), async (req, res, next) => {
-  const root = await u.assets.getAssetsDirectory();
-  const { directory, path } = await u.workspaceFile.resolveWorkspacePath(root, req.query.path as string);
-  u.workspaceFile.protectWorkspaceRoot(directory, path);
+export default router.get("/", validateFields({ path: z.string().min(1).max(4096), download: z.literal("true").optional(), version: z.literal("1080p").optional() }, "query"), async (req, res, next) => {
+  const asset = req.query.version === "1080p"
+    ? await u.assetVideoVariants.readVideoVariant(req.query.path as string)
+    : await u.assets.resolveAssetPath(req.query.path as string);
+  const { path } = asset;
   if (!(await lstat(path)).isFile()) throw Object.assign(new Error("只能读取文件"), { status: 400 });
-  if (req.query.download === "true") res.attachment(basename(path));
+  if (req.query.download === "true") res.attachment("name" in asset ? asset.name : basename(path));
   res.set({ "Cache-Control": "no-store", "Content-Security-Policy": "sandbox", "X-Content-Type-Options": "nosniff" });
   await sendFile(res, path, { dotfiles: "allow" }, err => { if (err) next(err); });
 });

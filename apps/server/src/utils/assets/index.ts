@@ -20,7 +20,7 @@ export async function getAssetsDirectory() {
   }
 }
 
-async function resolveAssetPath(path: string) {
+export async function resolveAssetPath(path: string) {
   const root = await getAssetsDirectory();
   const resolved = await resolveWorkspacePath(root, path);
   protectWorkspaceRoot(resolved.directory, resolved.path);

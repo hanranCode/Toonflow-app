@@ -63,15 +63,17 @@
               <span class="assetVisual" :class="entry.type === 'directory' ? 'folderVisual' : mediaKind(entry) + 'Visual'">
                 <mentionThumbnail v-if="mediaKind(entry) === 'image'" class="assetImage" :thumbnail="{ url: entry.path, mimeType: getMediaMimeType({ name: entry.path, type: '' }) }" globalAsset><span class="imageError"><icon-photo :size="38" aria-hidden="true" /></span></mentionThumbnail>
                 <icon-folder v-else-if="entry.type === 'directory'" :size="58" stroke="1.25" aria-hidden="true" />
-                <template v-else-if="mediaKind(entry) === 'video'"><mentionThumbnail class="assetVideo" :thumbnail="{ url: entry.path, mimeType: mentionAssetType(entry.path).mimeType }" globalAsset><icon-video class="mediaBackdrop" :size="76" stroke="1" aria-hidden="true" /></mentionThumbnail><span class="playButton"><icon-player-play :size="22" fill="currentColor" aria-hidden="true" /></span></template>
+                <template v-else-if="mediaKind(entry) === 'video'"><mentionThumbnail class="assetVideo" :thumbnail="{ url: entry.path, mimeType: mentionAssetType(entry.path).mimeType }" :assetVersion="versionFor(entry)" globalAsset><icon-video class="mediaBackdrop" :size="76" stroke="1" aria-hidden="true" /></mentionThumbnail><span class="playButton"><icon-player-play :size="22" fill="currentColor" aria-hidden="true" /></span></template>
                 <icon-music v-else-if="mediaKind(entry) === 'audio'" :size="52" stroke="1.25" aria-hidden="true" />
                 <icon-file v-else :size="52" stroke="1.25" aria-hidden="true" />
-                <span v-if="mediaKind(entry)" class="mediaBadge">{{ typeLabel(entry) }}</span>
+                <span v-if="mediaKind(entry)" class="mediaBadge">{{ entry.upscale?.state === 'ready' && versionFor(entry) === '1080p' ? '1080P' : typeLabel(entry) }}</span>
               </span>
               <span class="assetName" :title="entry.name">{{ entry.name }}</span>
             </component>
             <div class="cardFooter">
               <span class="assetDetails" :title="entry.path">{{ entry.type === 'directory' ? `${entry.children?.length ?? 0} 个项目` : folder === '.' && entry.path.includes('/') ? entry.path.slice(0, entry.path.lastIndexOf('/')) : typeLabel(entry) }}</span>
+              <videoVersionControl v-if="!canSelect && mediaKind(entry) === 'video'" :entry="entry" :version="versionFor(entry)" :submitting="isSubmitting(entry)"
+                @change="emit('version', entry, $event)" @upscale="emit('upscale', entry)" />
               <el-button class="moreButton" text :icon="IconDots" :aria-label="'更多 ' + entry.name" title="更多操作" @click="emit('menu', $event, entry)" />
             </div>
           </article>
@@ -94,8 +96,8 @@ import type { InputInstance } from "element-plus";
 import { IconChevronRight, IconDots, IconFile, IconFolder, IconFolderOpen, IconFolderPlus, IconLayoutGrid, IconMusic, IconPhoto, IconPlayerPlay, IconSearch, IconUpload, IconVideo } from "@tabler/icons-vue";
 import { mentionAssetType } from "@toonflow/server/agent/mentionSources";
 import mentionThumbnail from "@/components/agent/mentionThumbnail.vue";
-
-type AssetEntry = { name: string; path: string; type: "file" | "directory"; children?: AssetEntry[]; draft?: boolean };
+import type { AssetEntry, VideoVersion } from "@/lib/assetVideoVersions";
+import videoVersionControl from "./videoVersionControl.vue";
 type MediaKind = "image" | "audio" | "video";
 type DirectoryEntry = { name: string; path: string; children: DirectoryEntry[]; source: AssetEntry };
 
@@ -106,7 +108,8 @@ const props = defineProps<{
   newFolderParent?: string;
   folderSaving?: boolean;
   mediaKind: (entry: AssetEntry) => MediaKind | undefined;
-  assetUrl: (path: string) => string;
+  versionFor: (entry: AssetEntry) => VideoVersion;
+  isSubmitting: (entry: AssetEntry) => boolean;
   canSelect?: (entry: AssetEntry) => boolean;
   selecting?: boolean;
 }>();
@@ -119,6 +122,8 @@ const emit = defineEmits<{
   saveFolder: [];
   cancelFolder: [];
   preview: [entry: AssetEntry];
+  version: [entry: AssetEntry, version: VideoVersion];
+  upscale: [entry: AssetEntry];
   menu: [event: MouseEvent, entry: AssetEntry];
   drag: [event: DragEvent, entry: AssetEntry];
   select: [entry: AssetEntry];
