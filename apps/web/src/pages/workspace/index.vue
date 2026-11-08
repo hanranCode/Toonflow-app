@@ -1,5 +1,5 @@
 <template>
-  <main class="workspacePage" :inert="workspaceStore.projectLoadingVisible" :style="{ '--agentWidth': `${agentVisible ? agentWidth : 0}px` }">
+  <main class="workspacePage" :inert="workspaceStore.projectLoadingVisible" :style="{ '--agentWidth': `${agentVisible && activePanel !== 'filmstrip' ? agentWidth : 0}px` }">
     <canvasPanel
       :key="workspaceStore.project?.directory"
       v-model:selectedTool="selectedTool"
@@ -24,6 +24,9 @@
         :flushNodes="flushDocumentNodes"
         :fileAction="performFileAction"
         :saveNode="saveDocumentNode" />
+    </keep-alive>
+    <keep-alive :key="'filmstrip:' + workspaceStore.project?.directory">
+      <filmstripPanel v-if="activePanel === 'filmstrip' && workspaceStore.project?.directory" :directory="workspaceStore.project.directory" />
     </keep-alive>
     <workspaceMenu class="workspaceMenu" @openSettings="settingsVisible = true" />
     <div class="workspaceTools">
@@ -99,7 +102,7 @@
             </el-tooltip>
           </div>
         </el-card>
-        <el-tooltip v-if="!agentVisible" content="Toonflow Agent" placement="top" :showArrow="false" :hideAfter="0">
+        <el-tooltip v-if="!agentVisible && activePanel !== 'filmstrip'" content="Toonflow Agent" placement="top" :showArrow="false" :hideAfter="0">
           <el-button
             class="agentButton"
             :class="{ standalone: activePanel !== 'canvas' }"
@@ -110,7 +113,7 @@
         </el-tooltip>
       </div>
     </div>
-    <floatingAgent v-model="agentVisible" :inert="workspaceStore.projectLoadingVisible" @resize="agentWidth = $event" />
+    <floatingAgent v-model="workspaceAgentVisible" :inert="workspaceStore.projectLoadingVisible" @resize="agentWidth = $event" />
     <settings v-model="settingsVisible" />
     <el-dialog v-model="contactVisible" :title="contactInfo.title" width="min(360px, calc(100vw - 32px))" alignCenter appendToBody>
       <div class="contactContent">
@@ -134,7 +137,7 @@ import { translate } from "@toonflow/i18n/vue";
 import { computed, defineAsyncComponent, nextTick, onMounted, onScopeDispose, provide, ref, shallowRef, watch, type ComponentPublicInstance } from "vue";
 import { onBeforeRouteLeave } from "vue-router";
 import axios from "axios";
-import { IconVector, IconFileText, IconPointer, IconHandStop, IconPlus, IconSearch, IconHelp, IconBook, IconBug, IconBrandWechat, IconBriefcase } from "@tabler/icons-vue";
+import { IconVector, IconFileText, IconMovie, IconPointer, IconHandStop, IconPlus, IconSearch, IconHelp, IconBook, IconBug, IconBrandWechat, IconBriefcase } from "@tabler/icons-vue";
 import { ElMessage, ElMessageBox } from "element-plus";
 import { QRCode } from "tdesign-vue-next";
 import settings from "@/components/settings/index.vue";
@@ -149,7 +152,9 @@ import floatingAgent from "./components/floatingAgent.vue";
 
 const documentPanel = defineAsyncComponent(() => import("./panels/document/index.vue"));
 
-const activePanel = ref<"canvas" | "document">("canvas");
+const filmstripPanel = defineAsyncComponent(() => import("./panels/filmstrip/index.vue"));
+
+const activePanel = ref<"canvas" | "document" | "filmstrip">("canvas");
 const selectedTool = ref<"move" | "hand">("move");
 const sideButtonEvents = ["mousedown", "mouseup", "auxclick"] as const;
 // 鼠标侧键会直接触发原生历史导航，需在 DOM 事件阶段拦截，避免生成中的工作区被误关闭。
@@ -164,12 +169,21 @@ onScopeDispose(() => {
   for (const eventName of sideButtonEvents) window.removeEventListener(eventName, preventSideButtonNavigation, true);
 });
 const workspaceStore = useWorkspaceStore();
+provide("workspaceDirectory", () => {
+  if (!workspaceStore.project?.directory) throw new Error("请先打开工作区");
+  return workspaceStore.project.directory;
+});
 useProviderBalances();
 const panelOptions = [
   { label: "画布", value: "canvas", icon: IconVector },
   { label: "文档", value: "document", icon: IconFileText },
+  { label: "胶片", value: "filmstrip", icon: IconMovie },
 ];
 const agentVisible = ref(true);
+const workspaceAgentVisible = computed({
+  get: () => activePanel.value !== "filmstrip" && agentVisible.value,
+  set: value => { agentVisible.value = value; },
+});
 const agentWidth = ref(0);
 const settingsVisible = ref(false);
 const helpVisible = ref(false);
@@ -303,13 +317,13 @@ onBeforeRouteLeave(async () => {
 });
 
 async function switchPanel(value: string | number | boolean) {
-  if (value !== "canvas" && value !== "document") return false;
+  if (value !== "canvas" && value !== "document" && value !== "filmstrip") return false;
   try {
     if (activePanel.value === "document") await documentPanelRef.value?.flushSave();
     const changed = activePanel.value !== value;
     activePanel.value = value;
     await nextTick();
-    if (changed) anonymousData.track(value === "canvas" ? "workspace.canvas" : "workspace.document");
+    if (changed && value !== "filmstrip") anonymousData.track(value === "canvas" ? "workspace.canvas" : "workspace.document");
     return true;
   } catch (error) {
     ElMessage.error(error instanceof Error ? error.message : "文本保存失败");
